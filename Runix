@@ -10,9 +10,7 @@ echo -e "${GRN} ██████╗ ██████╗ ██╗   ██�
 
 ─── Config + Temp ────────────────────────────────────
 
-RUNIX_DIR="$HOME/Runix" CONFIG_FILE="$RUNIX_DIR/config" SHORTCUT_FILE="$RUNIX_DIR/shortcuts" BIN_DIR="$RUNIX_DIR/bin" mkdir -p "$BIN_DIR"
-
-PREVIEW_EXTENSIONS="txt log csv md json xml html class put"
+RUNIX_DIR="$HOME/Runix" CONFIG_FILE="$RUNIX_DIR/config" SHORTCUT_FILE="$RUNIX_DIR/shortcuts" BIN_DIR="$RUNIX_DIR/bin" mkdir -p "$BIN_DIR" PREVIEW_EXTENSIONS="txt log csv md json xml html class put"
 
 ─── Git Update Check ─────────────────────────────────
 
@@ -36,7 +34,7 @@ fi
 
 ─── Load or Ask for Settings ─────────────────────────
 
-load_config() { # Migrate from old hidden file if [[ -f "$HOME/.pexrc" && ! -f "$CONFIG_FILE" ]]; then echo -e "${YEL}📦 Migrating old config to new location...${NC}" mkdir -p "$RUNIX_DIR" mv "$HOME/.pexrc" "$CONFIG_FILE" fi
+load_config() { if [[ -f "$HOME/.pexrc" && ! -f "$CONFIG_FILE" ]]; then echo -e "${YEL}📦 Migrating old config to new location...${NC}" mkdir -p "$RUNIX_DIR" mv "$HOME/.pexrc" "$CONFIG_FILE" fi
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
     echo -e "${YEL}🔧 First time setup...${NC}"
@@ -75,7 +73,7 @@ load_config check_update
 
 ─── Shortcuts ────────────────────────────────────────
 
-expand_shortcut() { if grep -q "^$1=" "$SHORTCUT_FILE"; then grep "^$1=" "$SHORTCUT_FILE" | cut -d= -f2- else echo "$1" fi }
+expand_shortcut() { grep -q "^$1=" "$SHORTCUT_FILE" && grep "^$1=" "$SHORTCUT_FILE" | cut -d= -f2- || echo "$1" }
 
 ─── Runix Functions ──────────────────────────────────
 
@@ -111,10 +109,7 @@ execute() {
     case "$EXT" in
         c|cpp|cc|cxx) "$OUT" ;;
         py) python "$FILE" ;;
-        java)
-            MAIN_CLASS=$(find_java_main_class "$FILE")
-            [[ -n "$MAIN_CLASS" ]] && java -cp "$BIN_DIR" "$MAIN_CLASS"
-            ;;
+        java) MAIN_CLASS=$(find_java_main_class "$FILE"); [[ -n "$MAIN_CLASS" ]] && java -cp "$BIN_DIR" "$MAIN_CLASS" ;;
         js) node "$FILE" ;;
         sh) bash "$FILE" ;;
         *) return 1 ;;
@@ -143,10 +138,7 @@ if [[ ${#PREVIEW_FILES[@]} -gt 0 ]]; then
     case "$PREVIEW_MODE" in
         auto) DO_PREVIEW="y" ;;
         never) DO_PREVIEW="n" ;;
-        *)
-            echo -ne "${BLU}👁️  View output files? (y/n): ${NC}"
-            read -r DO_PREVIEW
-            ;;
+        *) echo -ne "${BLU}👁️  View output files? (y/n): ${NC}"; read -r DO_PREVIEW ;;
     esac
 
     if [[ "$DO_PREVIEW" == "y" || "$DO_PREVIEW" == "Y" ]]; then
@@ -198,4 +190,3 @@ show_help() { echo -e "${YEL}📘 Runix Commands:${NC}" echo "  run file.ext    
 
 COMMAND="${1,,}" MODE="${2,,}" case "$COMMAND" in clean) clean_bin ;; runall) run_all ;; uninstall) echo -e "${RED}⚠️ Uninstall Runix? (y/n): ${NC}" read -r CONFIRM [[ "$CONFIRM" == "y" || "$CONFIRM" == "Y" ]] && { rm -f "$HOME/bin/run" "$HOME/bin/Runix" rm -rf "$RUNIX_DIR" echo -e "${GRN}🧹 Uninstalled.${NC}" } || echo "Cancelled." ;; update) echo -e "${YEL}🔄 Manual update...${NC}" curl -s -o "$0" "https://raw.githubusercontent.com/Peace-forever69/Pex/main/Runix" chmod +x "$0" echo -e "${GRN}✅ Updated.${NC}" ;; settings) change_settings ;; info) show_info ;; search) search_file ;; shortcut) add_shortcut ;; help|--help|-h|"") show_help ;; *) run_file "$1" "$2" ;; esac
 
-     
