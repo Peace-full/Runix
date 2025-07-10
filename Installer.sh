@@ -23,7 +23,7 @@ echo -e "📦 Installing Runix..."
 mkdir -p "$HOME/bin"
 
 # ─── Download Main Script ────────────────────────────
-curl -s -o "$HOME/bin/Runix" https://raw.githubusercontent.com/Peace-forever69/Pex/main/Runix
+curl -s -o "$HOME/bin/Runix" https://raw.githubusercontent.com/Peace-forever69/Runix/main/Runix
 
 # ─── Make Executable ────────────────────────────────
 chmod +x "$HOME/bin/Runix"
