@@ -17,5 +17,16 @@ chmod +x Runix
 mkdir -p "$HOME/bin"
 ln -sf "$HOME/Runix/Runix" "$HOME/bin/run"
 
+# Ensure $HOME/bin is in PATH
+if ! echo "$PATH" | grep -q "$HOME/bin"; then
+    echo -e "\033[1;32m[Runix]\033[0m Adding \$HOME/bin to PATH in ~/.bashrc..."
+    if [ ! -f "$HOME/.bashrc" ]; then
+        touch "$HOME/.bashrc"
+    fi
+    grep -qxF 'export PATH=$HOME/bin:$PATH' "$HOME/.bashrc" || echo 'export PATH=$HOME/bin:$PATH' >> "$HOME/.bashrc"
+    # Source .bashrc for current session
+    source "$HOME/.bashrc"
+fi
+
 echo -e "\033[1;32m[Runix]\033[0m Installation complete!"
 echo -e "\033[1;32m[Runix]\033[0m Type \033[1;36mrun help\033[0m to get started."
