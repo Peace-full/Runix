@@ -39,6 +39,15 @@ echo -e "${GRN}
 ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝
 ${NC}${BLU}Runix: Smart File Runner (Termux/Ubuntu)${NC}"
 
+show_env() {
+    if [ -f /etc/os-release ]; then
+        OS=$(grep ^PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"')
+        echo -e "${CYAN}[Runix] Running inside: $OS${NC}"
+    else
+        echo -e "${RED}[Runix] OS environment unknown${NC}"
+    fi
+}
+
 # Environment Detection
 is_ubuntu() { grep -q "Ubuntu" /etc/issue 2>/dev/null; }
 proot_distro_installed() { command -v proot-distro >/dev/null 2>&1; }
@@ -252,6 +261,9 @@ run_file() {
     local file
     file=$(find_file "$input")
     [[ -z "$file" ]] && echo -e "${RED}❌ File not found: $input${NC}" && log "File not found: $input" && return
+
+    # Always show where Runix is running
+    show_env
 
     ENV_TO_USE=$(choose_env)
     if [[ "$ENV_TO_USE" == "ubuntu" ]]; then
