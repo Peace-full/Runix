@@ -1,94 +1,117 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Runix: Smart File Runner for Termux
+# Runix: Smart File Runner for Termux & Ubuntu
 
-# ── Colors ──
+# Colors
 RED='\033[0;31m'
 GRN='\033[0;32m'
 YEL='\033[1;33m'
 BLU='\033[0;34m'
+CYAN='\033[1;36m'
 NC='\033[0m'
 
-# ── Update Notification (runs every time the script is used) ──
-check_update() {
-    LATEST_URL="https://raw.githubusercontent.com/Peace-forever69/Runix/main/Runix"
-    LOCAL="$0"
-    if [[ -f "$LOCAL" ]]; then
-        LOCAL_HASH=$(md5sum "$LOCAL" | awk '{print $1}')
-        REMOTE_HASH=$(curl -s "$LATEST_URL" | md5sum | awk '{print $1}')
-        if [[ "$LOCAL_HASH" != "$REMOTE_HASH" ]]; then
-            echo -e "${YEL}[Runix] Update available! Run '${BLU}run update${YEL}' to get the latest version.${NC}"
-        fi
-    fi
-}
-check_update
-
-# ── ASCII Banner ──
-echo -e "${GRN} 
-██████╗ ██╗   ██╗███╗   ██╗██╗██╗  ██╗
-██╔══██╗██║   ██║████╗  ██║██║╚██╗██╔╝
-██████╔╝██║   ██║██╔██╗ ██║██║ ╚███╔╝ 
-██╔══██╗██║   ██║██║╚██╗██║██║ ██╔██╗ 
-██║  ██║╚██████╔╝██║ ╚████║██║██╔╝ ██╗
-╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝
-                                      
-${NC}\n${BLU}Runix: Smart File Runner${NC}"
-
-# ── Config + Temp ──
+# Paths
 RUNIX_DIR="$HOME/Runix"
 CONFIG_FILE="$RUNIX_DIR/config"
 SHORTCUT_FILE="$RUNIX_DIR/shortcuts"
 BIN_DIR="$RUNIX_DIR/bin"
+LOG_DIR="$RUNIX_DIR/logs"
+PLUGINS_DIR="$RUNIX_DIR/plugins"
 PREVIEW_EXTENSIONS="txt log csv md json xml html class put"
+DEFAULT_USER_FOLDER="/data/data/com.termux/files/home"
 
-mkdir -p "$BIN_DIR"
+mkdir -p "$RUNIX_DIR" "$BIN_DIR" "$LOG_DIR" "$PLUGINS_DIR"
 
-# ── Load or Ask for Settings ──
-load_config() {
-    if [[ -f "$HOME/.pexrc" && ! -f "$CONFIG_FILE" ]]; then
-        echo -e "${YEL}📦 Migrating old config to new location...${NC}"
-        mkdir -p "$RUNIX_DIR"
-        mv "$HOME/.pexrc" "$CONFIG_FILE"
-    fi
+# Logging
+LOG_FILE="$LOG_DIR/runix.log"
+LOG_RETENTION_DAYS_DEFAULT=1
 
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo -e "${YEL}🔧 First time setup...${NC}"
-        mkdir -p "$RUNIX_DIR"
-        echo -ne "${BLU}📁 Enter your main folder path (script wont work outside this path): ${NC}"
-        read -r USER_FOLDER
-        echo "user_folder=$USER_FOLDER" >> "$CONFIG_FILE"
+log() {
+    echo "$(date '+╗██╗██╗  ██╗
+██╔══██╗██║   ██║████╗  ██║██║╚██╗██╔╝
+██████╔╝██║   ██║██╔██╗ ██║██║ ╚███╔╝
+██╔══██╗██║   ██║██║╚██╗██║██║ ██╔██╗
+██║  ██║╚██████╔╝██║ ╚████║██║██╔╝ ██╗
+╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝
+${NC}${BLU}Runix: Smart File Runner (Termux/Ubuntu)${NC}"
 
-        echo -e "${YEL}👁️ Choose preview mode:${NC}"
-        echo -e "   ${GRN}[1]${NC} Always preview"
-        echo -e "   ${GRN}[2]${NC} Never preview"
-        echo -e "   ${GRN}[3]${NC} Ask every time"
-        echo -ne "${BLU}Enter choice [1-3]: ${NC}"
-        read -r CHOICE
-        case "$CHOICE" in
-            1) echo "preview=auto" >> "$CONFIG_FILE" ;;
-            2) echo "preview=never" >> "$CONFIG_FILE" ;;
-            3) echo "preview=ask" >> "$CONFIG_FILE" ;;
+# Environment Detection
+is_ubuntu() { grep -q "Ubuntu" /etc/issue 2>/dev/null; }
+proot_distro_installed() { command -v proot-distro >/dev/null 2>&1; }
+ubuntu_exists() { proot-distro list 2>/dev/null | grep -q 'ubuntu'; }
+
+# Interactive Setup
+setup_config() {
+    echo -e "${YEL}🔧 Initial Runix setup...${NC}"
+    echo "user_folder=$DEFAULT_USER_FOLDER" > "$CONFIG_FILE"
+
+    echo -e "${YEL}🌱 Do you want to enable Ubuntu integration for better coding experience?${NC}"
+    echo -e "${GRN}[y] Yes${NC}  ${RED}[n] No${NC}"
+    read -r UBUNTU_CHOICE
+    if [[ "$UBUNTU_CHOICE" =~ ^[yY]$ ]]; then
+        if ! proot_distro_installed; then
+            echo -e "${YEL}Installing proot-distro...${NC}"
+            pkg install proot-distro -y
+        fi
+        if ! ubuntu_exists; then
+            echo -e "${YEL}Installing Ubuntu...${NC}"
+            proot-distro install ubuntu
+        fi
+        echo "use_ubuntu=yes" >> "$CONFIG_FILE"
+        echo -e "${YEL}🛠 Where do you want to compile/run code by default?${NC}"
+        echo -e "   ${GRN}[1]${NC} Termux"
+        echo -e "   ${GRN}[2]${NC} Ubuntu"
+        read -r CODE_ENV_CHOICE
+        case "$CODE_ENV_CHOICE" in
+            1) echo "default_env=termux" >> "$CONFIG_FILE" ;;
+            2) echo "default_env=ubuntu" >> "$CONFIG_FILE" ;;
+            *) echo "default_env=termux" >> "$CONFIG_FILE" ;;
         esac
-
-        echo -ne "${BLU}🧱 Save compiled binaries after running? (y/n): ${NC}"
-        read -r KEEP
-        [[ "$KEEP" =~ ^[yY]$ ]] && echo "save_binaries=yes" >> "$CONFIG_FILE" || echo "save_binaries=no" >> "$CONFIG_FILE"
-
-        touch "$SHORTCUT_FILE"
+    else
+        echo "use_ubuntu=no" >> "$CONFIG_FILE"
+        echo "default_env=termux" >> "$CONFIG_FILE"
     fi
 
-    USER_FOLDER=$(grep '^user_folder=' "$CONFIG_FILE" | cut -d= -f2)
-    PREVIEW_MODE=$(grep '^preview=' "$CONFIG_FILE" | cut -d= -f2)
-    SAVE_BINARIES=$(grep '^save_binaries=' "$CONFIG_FILE" | cut -d= -f2)
+    echo -e "${YEL}👁️ Choose preview mode:${NC}"
+    echo -e "   ${GRN}[1]${NC} Always preview"
+    echo -e "   ${GRN}[2]${NC} Never preview"
+    echo -e "   ${GRN}[3]${NC} Ask every time"
+    read -r CHOICE
+    case "$CHOICE" in
+        1) echo "preview=auto" >> "$CONFIG_FILE" ;;
+        2) echo "preview=never" >> "$CONFIG_FILE" ;;
+        3) echo "preview=ask" >> "$CONFIG_FILE" ;;
+    esac
+
+    echo -e "${BLU}🧱 Save compiled binaries after running? (y/n): ${NC}"
+    read -r KEEP
+    [[ "$KEEP" =~ ^[yY]$ ]] && echo "save_binaries=yes" >> "$CONFIG_FILE" || echo "save_binaries=no" >> "$CONFIG_FILE"
+
+    echo -e "${YEL}🗑️ How many days to keep logs? (default: 1)${NC}"
+    read -r LOGDAYS
+    LOGDAYS=${LOGDAYS:-1}
+    echo "log_retention_days=$LOGDAYS" >> "$CONFIG_FILE"
+
+    touch "$SHORTCUT_FILE"
 }
 
+# Load Config
+load_config() {
+    [[ ! -f "$CONFIG_FILE" ]] && setup_config
+    USER_FOLDER=$(grep '^user_folder=' "$CONFIG_FILE" | cut -d= -f2)
+    USE_UBUNTU=$(grep '^use_ubuntu=' "$CONFIG_FILE" | cut -d= -f2)
+    DEFAULT_ENV=$(grep '^default_env=' "$CONFIG_FILE" | cut -d= -f2)
+    PREVIEW_MODE=$(grep '^preview=' "$CONFIG_FILE" | cut -d= -f2)
+    SAVE_BINARIES=$(grep '^save_binaries=' "$CONFIG_FILE" | cut -d= -f2)
+    LOG_RETENTION_DAYS=$(grep '^log_retention_days=' "$CONFIG_FILE" | cut -d= -f2)
+}
 load_config
 
-# ── Shortcuts ──
+# Shortcuts
 expand_shortcut() {
     grep -q "^$1=" "$SHORTCUT_FILE" && grep "^$1=" "$SHORTCUT_FILE" | cut -d= -f2- || echo "$1"
 }
 
-# ── Dependency Check ──
+# Dependency Check
 need_pkg() {
     local cmd="$1"
     local pkg="$2"
@@ -97,77 +120,155 @@ need_pkg() {
         echo -ne "${YEL}Install '$pkg' now? (y/n): ${NC}"
         read -r ans
         if [[ "$ans" =~ ^[yY]$ ]]; then
-            pkg install -y "$pkg"
+            if is_ubuntu; then
+                apt update && apt install -y "$pkg"
+            else
+                pkg install -y "$pkg"
+            fi
         else
             echo -e "${RED}Cannot continue without '$cmd'.${NC}"
+            log "Missing dependency: $cmd"
             return 1
         fi
     fi
 }
 
-# ── Main Functions ──
-
+# Fuzzy/Regular File Search
 find_file() {
-    find "$USER_FOLDER" -type f -name "$1" | head -n 1
+    local fname="$1"
+    if command -v fzf >/dev/null 2>&1; then
+        find "$USER_FOLDER" -type f -iname "$fname*" | fzf --prompt="Choose file: " --height 20
+    else
+        find "$USER_FOLDER" -type f -iname "$fname*" | head -n 1
+    fi
 }
 
+# Main Java Class Finder
 find_java_main_class() {
     grep -E 'public\s+class\s+\w+' "$1" | grep -B 2 'public\s+static\s+void\s+main' | grep 'public\s+class' | sed -E 's/public class ([A-Za-z0-9_]+).*/\1/' | head -n 1
 }
 
+# Info
 show_info() {
     echo -e "${YEL}🔧 Runix Configuration:${NC}"
     echo "• User folder     : $USER_FOLDER"
     echo "• Preview mode    : $PREVIEW_MODE"
     echo "• Save binaries   : $SAVE_BINARIES"
+    echo "• Ubuntu enabled  : $USE_UBUNTU"
+    echo "• Default env     : $DEFAULT_ENV"
+    echo "• Log retention   : $LOG_RETENTION_DAYS days"
     echo "• Config file     : $CONFIG_FILE"
     echo "• Shortcut file   : $SHORTCUT_FILE"
+    echo "• Plugins dir     : $PLUGINS_DIR"
+}
+
+# Parallel Execution
+run_parallel() {
+    local files=("$@")
+    for f in "${files[@]}"; do
+        run_file "$f" &
+    done
+    wait
+}
+
+# Plugin Runner
+run_plugin() {
+    local file="$1"
+    local ext="${file##*.}"
+    local plugin="$PLUGINS_DIR/$ext"
+    if [[ -x "$plugin" ]]; then
+        "$plugin" "$file"
+        return $?
+    fi
+    return 1
+}
+
+# Compile & Execute Logic
+compile() {
+    local ext="$1"
+    local file="$2"
+    local out="$3"
+    case "$ext" in
+        c) need_pkg clang clang || return 1; clang -fsyntax-only "$file" || return 1; clang "$file" -o "$out" ;;
+        cpp|cc|cxx) need_pkg clang clang || return 1; clang++ -fsyntax-only "$file" || return 1; clang++ "$file" -o "$out" ;;
+        py) need_pkg python python || return 1; python -m py_compile "$file" ;;
+        java) need_pkg javac openjdk-17 || return 1; javac "$file" -d "$BIN_DIR" ;;
+        js) need_pkg node nodejs || return 1; ;;
+        sh) need_pkg bash bash || return 1; ;;
+        rs) need_pkg rustc rust || return 1; rustc "$file" -o "$out" ;;
+        go) need_pkg go golang || return 1; go build -o "$out" "$file" ;;
+        php|rb) ;; # Interpreted
+        *) run_plugin "$file" || return 1 ;;
+    esac
+}
+execute() {
+    local ext="$1"
+    local file="$2"
+    local out="$3"
+    case "$ext" in
+        c|cpp|cc|cxx|rs|go) "$out" ;;
+        py) need_pkg python python || return 1; python "$file" ;;
+        java) need_pkg java openjdk-17 || return 1; MAIN_CLASS=$(find_java_main_class "$file"); [[ -n "$MAIN_CLASS" ]] && java -cp "$BIN_DIR" "$MAIN_CLASS" ;;
+        js) need_pkg node nodejs || return 1; node "$file" ;;
+        sh) need_pkg bash bash || return 1; bash "$file" ;;
+        php) need_pkg php php || return 1; php "$file" ;;
+        rb) need_pkg ruby ruby || return 1; ruby "$file" ;;
+        *) run_plugin "$file" || return 1 ;;
+    esac
+}
+
+# Ubuntu Integration
+run_in_ubuntu() {
+    local file="$1" mode="$2"
+    TMP_RUNIX="$HOME/Runix/ubuntu_tmp"
+    mkdir -p "$TMP_RUNIX"
+    cp "$file" "$TMP_RUNIX/"
+    BASENAME=$(basename "$file")
+    CMD="cd $TMP_RUNIX; bash Runix $BASENAME $mode"
+    echo -e "${YEL}🔗 Running in Ubuntu...${NC}"
+    proot-distro login ubuntu --bind "$HOME:/termux-home" -- bash -c "$CMD"
+    rm -f "$TMP_RUNIX/$BASENAME"
+}
+
+choose_env() {
+    if [[ "$USE_UBUNTU" == "yes" ]]; then
+        echo -e "${YEL}🌐 Where do you want to run?${NC} [termux/ubuntu] (default: $DEFAULT_ENV)"
+        read -r ENV_CHOICE
+        [[ -z "$ENV_CHOICE" ]] && ENV_CHOICE="$DEFAULT_ENV"
+        echo "$ENV_CHOICE"
+    else
+        echo "termux"
+    fi
 }
 
 run_file() {
-    INPUT=$(expand_shortcut "$1")
-    MODE="$2"
-    FILE=$(find_file "$INPUT")
-    [[ -z "$FILE" ]] && echo -e "${RED}❌ File not found: $INPUT${NC}" && return
+    local input="$1" mode="$2"
+    input=$(expand_shortcut "$input")
+    local file
+    file=$(find_file "$input")
+    [[ -z "$file" ]] && echo -e "${RED}❌ File not found: $input${NC}" && log "File not found: $input" && return
 
-    EXT="${FILE##*.}"
-    BASE="${FILE%.*}"
-    OUT="$BIN_DIR/$(basename "$BASE")"
+    ENV_TO_USE=$(choose_env)
+    if [[ "$ENV_TO_USE" == "ubuntu" ]]; then
+        run_in_ubuntu "$file" "$mode"
+        return
+    fi
 
-    echo -e "${BLU}📁 File found: $FILE${NC}"
-    cd "$(dirname "$FILE")" || return 1
+    local ext="${file##*.}"
+    local base="${file%.*}"
+    local out="$BIN_DIR/$(basename "$base")"
+
+    echo -e "${BLU}📁 File found: $file${NC}"
+    cd "$(dirname "$file")" || return 1
 
     START=$(date +%s)
     USAGE_BEFORE=$(ps -o rss= -p $$)
 
-    compile() {
-        case "$EXT" in
-            c) need_pkg clang clang || return 1; clang -fsyntax-only "$FILE" || return 1; clang "$FILE" -o "$OUT" ;;
-            cpp|cc|cxx) need_pkg clang clang || return 1; clang++ -fsyntax-only "$FILE" || return 1; clang++ "$FILE" -o "$OUT" ;;
-            py) need_pkg python python || return 1; python -m py_compile "$FILE" ;;
-            java) need_pkg javac openjdk-17 || return 1; javac "$FILE" -d "$BIN_DIR" ;;
-            js) need_pkg node nodejs || return 1; ;;
-            sh) need_pkg bash bash || return 1; ;;
-            *) return 1 ;;
-        esac
-    }
-
-    execute() {
-        case "$EXT" in
-            c|cpp|cc|cxx) "$OUT" ;;
-            py) need_pkg python python || return 1; python "$FILE" ;;
-            java) need_pkg java openjdk-17 || return 1; MAIN_CLASS=$(find_java_main_class "$FILE"); [[ -n "$MAIN_CLASS" ]] && java -cp "$BIN_DIR" "$MAIN_CLASS" ;;
-            js) need_pkg node nodejs || return 1; node "$FILE" ;;
-            sh) need_pkg bash bash || return 1; bash "$FILE" ;;
-            *) return 1 ;;
-        esac
-    }
-
-    case "$MODE" in
-        c) compile ;;
-        r) execute ;;
-        cr|rc|"") compile && execute ;;
-        *) echo -e "${RED}❌ Unknown mode: $MODE${NC}"; return ;;
+    case "$mode" in
+        c) compile "$ext" "$file" "$out" ;;
+        r) execute "$ext" "$file" "$out" ;;
+        cr|rc|"") compile "$ext" "$file" "$out" && execute "$ext" "$file" "$out" ;;
+        *) echo -e "${RED}❌ Unknown mode: $mode${NC}"; log "Unknown mode: $mode"; return ;;
     esac
 
     END=$(date +%s)
@@ -188,13 +289,18 @@ run_file() {
         esac
         if [[ "$DO_PREVIEW" =~ ^[yY]$ ]]; then
             for f in "${PREVIEW_FILES[@]}"; do
-                echo -e "\n${YEL}--- $f ---${NC}"
-                less "$f"
+                if command -v bat >/dev/null 2>&1; then
+                    bat "$f"
+                elif command -v pygmentize >/dev/null 2>&1; then
+                    pygmentize "$f"
+                else
+                    less "$f"
+                fi
             done
         fi
     fi
 
-    [[ "$SAVE_BINARIES" != "yes" && -f "$OUT" ]] && rm -f "$OUT"
+    [[ "$SAVE_BINARIES" != "yes" && -f "$out" ]] && rm -f "$out"
     cd - > /dev/null
 }
 
@@ -206,7 +312,7 @@ clean_bin() {
 run_all() {
     find "$USER_FOLDER" -type f | while read -r file; do
         case "$file" in
-            *.c|*.cpp|*.cc|*.cxx|*.py|*.java|*.js|*.sh) run_file "$(basename "$file")" ;;
+            *.c|*.cpp|*.cc|*.cxx|*.py|*.java|*.js|*.sh|*.rs|*.go|*.php|*.rb) run_file "$(basename "$file")" ;;
         esac
     done
 }
@@ -215,7 +321,7 @@ search_file() {
     echo -ne "${BLU}🔍 Enter filename to search: ${NC}"
     read -r name
     echo -e "${YEL}🔎 Search results in $USER_FOLDER:${NC}"
-    find "$USER_FOLDER" -type f -iname "$name" | while read -r f; do
+    find "$USER_FOLDER" -type f -iname "$name*" | while read -r f; do
         SIZE=$(du -h "$f" | cut -f1)
         TYPE=$(file -b "$f")
         echo -e "${GRN}• $(basename "$f")${NC} | $TYPE | $SIZE | $f"
@@ -228,11 +334,10 @@ change_settings() {
     sed -i '/^user_folder=/d' "$CONFIG_FILE"
     echo "user_folder=$FOLDER" >> "$CONFIG_FILE"
 
-    echo -e "${YEL}👁️ Preview mode:${NC}"
+    echo -e "${YEL}👁 mode:${NC}"
     echo -e "   ${GRN}[1]${NC} Always preview"
     echo -e "   ${GRN}[2]${NC} Never preview"
     echo -e "   ${GRN}[3]${NC} Ask every time"
-    echo -ne "${BLU}Enter choice [1-3]: ${NC}"
     read -r CHOICE
     sed -i '/^preview=/d' "$CONFIG_FILE"
     case "$CHOICE" in
@@ -245,6 +350,12 @@ change_settings() {
     read -r KEEP
     sed -i '/^save_binaries=/d' "$CONFIG_FILE"
     [[ "$KEEP" =~ ^[yY]$ ]] && echo "save_binaries=yes" >> "$CONFIG_FILE" || echo "save_binaries=no" >> "$CONFIG_FILE"
+
+    echo -ne "${YEL}🗑️ How many days to keep logs? (default: 1): ${NC}"
+    read -r LOGDAYS
+    sed -i '/^log_retention_days=/d' "$CONFIG_FILE"
+    LOGDAYS=${LOGDAYS:-1}
+    echo "log_retention_days=$LOGDAYS" >> "$CONFIG_FILE"
 }
 
 add_shortcut() {
@@ -272,7 +383,17 @@ show_help() {
     echo "  run help           ▶️  Show help message"
 }
 
-# ── Command Dispatcher ──
+last_error() {
+    echo -e "${YEL}Last error log:${NC}"
+    tail -n 20 "$LOG_FILE"
+}
+
+list_plugins() {
+    echo -e "${YEL}Available plugins:${NC}"
+    ls "$PLUGINS_DIR"
+}
+
+# Command Dispatcher
 COMMAND="${1,,}"
 MODE="${2,,}"
 case "$COMMAND" in
@@ -295,10 +416,12 @@ case "$COMMAND" in
         chmod +x "$0"
         echo -e "${GRN}✅ Updated.${NC}"
         ;;
-    settings) change_settings ;;
+    settings|setup) change_settings ;;
     info) show_info ;;
     search) search_file ;;
     shortcut) add_shortcut ;;
     help|--help|-h|"") show_help ;;
+    last-error) last_error ;;
+    plugins) list_plugins ;;
     *) run_file "$1" "$2" ;;
 esac
