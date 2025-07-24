@@ -22,7 +22,7 @@ Runix is a powerful, interactive shell script for Android Termux that lets you c
 Open Termux and run:
 
 ```bash
-curl -s https://raw.githubusercontent.com/Peace-forever69/Runix/main/runix-installer.sh | bash
+curl -s https://raw.githubusercontent.com/Peace-full/Runix/main/runix-installer.sh | bash
 ```
 
 - This sets up everything in `$HOME/Runix` and creates a shortcut command: `run`
@@ -101,6 +101,5 @@ run uninstall
 
 ## 🙏 Credits
 
-Developed by [Peace-forever69](https://github.com/Peace-forever69)
-
+Developed by Peace & Gpt
 ---
