@@ -101,5 +101,5 @@ run uninstall
 
 ## 🙏 Credits
 
-Developed by Peace & Gpt
+Developed by Peace
 ---
