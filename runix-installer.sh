@@ -98,15 +98,15 @@ check_root() {
 
 # Show system info
 show_system_info() {
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC}  ${BOLD}System Information${NC}"
-    echo -e "${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}╠═══════════════════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║${NC}  Operating System : ${GRN}$OS_DISPLAY${NC}"
     echo -e "${CYAN}║${NC}  Architecture     : ${GRN}$ARCH_DISPLAY${NC}"
     echo -e "${CYAN}║${NC}  Shell            : ${GRN}${SHELL##*/}${NC}"
     echo -e "${CYAN}║${NC}  User             : ${GRN}$(whoami)${NC}"
     echo -e "${CYAN}║${NC}  Home Directory   : ${GRN}$HOME${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════════╝${NC}"
     echo
 }
 
@@ -196,6 +196,11 @@ setup_directories() {
             BIN_DIR="$HOME/bin"
             CONFIG_DIR="$HOME/Runix"
             ;;
+        *)
+            INSTALL_DIR="$HOME/Runix"
+            BIN_DIR="$HOME/bin"
+            CONFIG_DIR="$HOME/Runix"
+            ;;
     esac
     
     echo -e "${BLU}📁 Installation directories:${NC}"
@@ -241,7 +246,8 @@ download_runix() {
     echo -e "${BLU}⬇️  Downloading Runix...${NC}"
     
     local script_url="${REPO_URL}/Runix"
-    local tmp_file="/tmp/runix_script_$$"
+    local tmp_file
+    tmp_file="$(mktemp -t runix.XXXXXX 2>/dev/null || mktemp)"
     
     if command -v curl >/dev/null 2>&1; then
         if curl -fsSL "$script_url" -o "$tmp_file"; then
@@ -352,7 +358,7 @@ os_specific_setup() {
             echo -e "${CYAN}Setting up Termux integration...${NC}"
             
             # Termux storage setup
-            if [[ ! -d "$HOME/storage" ]]; then
+            if [[ ! -d "$HOME/storage" ]] && command -v termux-setup-storage >/dev/null 2>&1; then
                 echo -ne "${BLU}Setup Termux storage access? (y/n): ${NC}"
                 read -r response
                 if [[ "$response" =~ ^[yY]$ ]]; then
@@ -463,8 +469,9 @@ if [[ "\$confirm" =~ ^[yY]$ ]]; then
     # Remove from shell configs
     for rc in ~/.bashrc ~/.zshrc ~/.bash_profile ~/.config/fish/config.fish; do
         if [[ -f "\$rc" ]]; then
+            # Remove the Runix comment and any PATH export lines that reference the BIN_DIR
             sed -i.bak '/# Runix/d' "\$rc" 2>/dev/null || true
-            sed -i.bak '\|$BIN_DIR|d' "\$rc" 2>/dev/null || true
+            sed -i.bak "\|$BIN_DIR|d" "\$rc" 2>/dev/null || true
             rm -f "\${rc}.bak"
         fi
     done
@@ -489,9 +496,9 @@ run_initial_setup() {
     echo
     
     if command -v runix >/dev/null 2>&1; then
-        runix help
+        runix help || true
     elif [[ -x "$BIN_DIR/runix" ]]; then
-        "$BIN_DIR/runix" help
+        "$BIN_DIR/runix" help || true
     else
         echo -e "${YEL}⚠️  Please restart your shell or run:${NC}"
         echo -e "    ${CYAN}source ~/.bashrc${NC}  # or your shell config"
@@ -502,11 +509,11 @@ run_initial_setup() {
 # Show completion message
 show_completion() {
     echo
-    echo -e "${GRN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GRN}╔═══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${GRN}║                                                            ║${NC}"
-    echo -e "${GRN}║          ✨ Installation Complete! ✨                     ║${NC}"
+    echo -e "${GRN}║          ✨ Installation Complete! ✨                      ║${NC}"
     echo -e "${GRN}║                                                            ║${NC}"
-    echo -e "${GRN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${GRN}╚═══════════════════════════════════════════════════════════╝${NC}"
     echo
     echo -e "${CYAN}📍 Installation Location: ${YEL}$INSTALL_DIR${NC}"
     echo -e "${CYAN}🔗 Binary Location: ${YEL}$BIN_DIR/runix${NC}"
@@ -556,9 +563,9 @@ main() {
     setup_directories
     
     # Confirm installation
-    echo -e "${YEL}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${YEL}╔═══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${YEL}║  Ready to install Runix                                    ║${NC}"
-    echo -e "${YEL}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${YEL}╚═══════════════════════════════════════════════════════════╝${NC}"
     echo -ne "${BLU}Continue with installation? (y/n): ${NC}"
     read -r confirm
     
