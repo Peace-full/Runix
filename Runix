@@ -1,95 +1,79 @@
 #!/usr/bin/env bash
-# Universal Runix v2.0: Cross-Platform Smart File Runner
-# Supports: Linux (Ubuntu/Debian/Fedora/Arch), Windows (Git Bash/WSL), Termux (Android)
-# shellcheck disable=SC2155
+# Runix: Smart Cross-Platform File Runner
+# Supports: Linux, macOS, Windows (Git Bash/WSL), Android Termux
 
-# Strict error handling
 set -euo pipefail
 
-# Cleanup trap
-cleanup() {
-    local exit_code=$?
-    # Add any cleanup operations here
-    [[ -n "${TEMP_FILES:-}" ]] && rm -f "${TEMP_FILES[@]}" 2>/dev/null || true
-    exit "$exit_code"
+# Detect OS
+detect_os() {
+    case "$(uname -s)" in
+        Linux*)
+            if [[ -d "/data/data/com.termux" ]]; then
+                OS="termux"
+            else
+                OS="linux"
+            fi
+            ;;
+        Darwin*) OS="macos" ;;
+        MINGW*|MSYS*|CYGWIN*) OS="windows" ;;
+        *) OS="unknown" ;;
+    esac
 }
-trap cleanup EXIT INT TERM
+detect_os
 
-# Platform Detection
-detect_platform() {
-    if [[ -d "/data/data/com.termux" ]]; then
-        PLATFORM="termux"
-    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        PLATFORM="linux"
-    elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "${WSLENV:-}" ]] || [[ "$(uname -s 2>/dev/null || echo "")" == MINGW* ]]; then
-        PLATFORM="windows"
-    else
-        PLATFORM="unknown"
-    fi
-}
-detect_platform
-
-# Colors (with fallback for non-interactive terminals)
-if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput colors >/dev/null 2>&1; then
+# Colors
+if [[ -t 1 ]]; then
     RED='\033[0;31m'
     GRN='\033[0;32m'
     YEL='\033[1;33m'
     BLU='\033[0;34m'
     CYAN='\033[1;36m'
+    MAG='\033[0;35m'
     NC='\033[0m'
 else
-    RED='' GRN='' YEL='' BLU='' CYAN='' NC=''
+    RED='' GRN='' YEL='' BLU='' CYAN='' MAG='' NC=''
 fi
 
-# Platform-specific paths
+# OS-specific paths
 setup_paths() {
-    case "$PLATFORM" in
+    case "$OS" in
         termux)
-            RUNIX_DIR="${HOME}/Runix"
-            DEFAULT_USER_FOLDER="${HOME}"
-            BIN_INSTALL_DIR="${PREFIX}/bin"
+            RUNIX_DIR="$HOME/Runix"
+            DEFAULT_USER_FOLDER="/data/data/com.termux/files/home"
+            PKG_MANAGER="pkg"
             ;;
-        linux)
-            RUNIX_DIR="${HOME}/.runix"
-            DEFAULT_USER_FOLDER="${HOME}"
-            BIN_INSTALL_DIR="${HOME}/.local/bin"
+        linux|macos)
+            RUNIX_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/runix"
+            DEFAULT_USER_FOLDER="$HOME"
+            PKG_MANAGER=$(command -v apt-get || command -v yum || command -v brew || echo "none")
             ;;
         windows)
-            RUNIX_DIR="${HOME}/Runix"
-            DEFAULT_USER_FOLDER="${HOME}"
-            BIN_INSTALL_DIR="${HOME}/bin"
+            RUNIX_DIR="$HOME/Runix"
+            DEFAULT_USER_FOLDER="$HOME"
+            PKG_MANAGER="choco"
             ;;
         *)
-            echo -e "${RED}❌ Unsupported platform: $PLATFORM${NC}" >&2
+            echo -e "${RED}Unsupported OS${NC}"
             exit 1
             ;;
     esac
 
-    CONFIG_FILE="${RUNIX_DIR}/config"
-    SHORTCUT_FILE="${RUNIX_DIR}/shortcuts"
-    BIN_DIR="${RUNIX_DIR}/bin"
-    LOG_DIR="${RUNIX_DIR}/logs"
-    PREVIEW_EXTENSIONS="txt log csv md json xml html"
+    CONFIG_FILE="$RUNIX_DIR/config"
+    SHORTCUT_FILE="$RUNIX_DIR/shortcuts"
+    BIN_DIR="$RUNIX_DIR/bin"
+    LOG_DIR="$RUNIX_DIR/logs"
+    HISTORY_FILE="$RUNIX_DIR/history"
+    PREVIEW_EXTENSIONS="txt log csv md json xml html class"
     
-    mkdir -p "$RUNIX_DIR" "$BIN_DIR" "$LOG_DIR" "$BIN_INSTALL_DIR" 2>/dev/null || true
+    mkdir -p "$RUNIX_DIR" "$BIN_DIR" "$LOG_DIR"
 }
 setup_paths
 
 # Logging
-LOG_FILE="${LOG_DIR}/runix.log"
-TEMP_FILES=()
+LOG_FILE="$LOG_DIR/runix_$(date +%Y%m%d).log"
 
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') | $*" >> "$LOG_FILE" 2>/dev/null || true
-}
-
-# Error handler
-error_exit() {
-    local msg="${1:-Unknown error}"
-    local code="${2:-1}"
-    echo -e "${RED}❌ Error: $msg${NC}" >&2
-    log "ERROR: $msg"
-    exit "$code"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$OS] $*" >> "$LOG_FILE"
 }
 
 # Banner
@@ -101,405 +85,333 @@ show_banner() {
 ██╔══██╗██║   ██║██║╚██╗██║██║ ██╔██╗
 ██║  ██║╚██████╔╝██║ ╚████║██║██╔╝ ██╗
 ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝
-${NC}${BLU}Universal Runix v2.0 ($PLATFORM)${NC}"
-}
-show_banner
-
-# Cross-platform sed in-place edit
-safe_sed_replace() {
-    local pattern="$1"
-    local file="$2"
-    local tmpfile
-    tmpfile="$(mktemp)" || return 1
-    TEMP_FILES+=("$tmpfile")
-    
-    if sed "$pattern" "$file" > "$tmpfile" 2>/dev/null; then
-        mv "$tmpfile" "$file" || return 1
-        return 0
-    else
-        rm -f "$tmpfile" 2>/dev/null || true
-        return 1
-    fi
-}
-
-# Cross-platform realpath
-get_realpath() {
-    local path="$1"
-    if command -v realpath >/dev/null 2>&1; then
-        realpath "$path" 2>/dev/null || echo "$path"
-    elif command -v readlink >/dev/null 2>&1; then
-        readlink -f "$path" 2>/dev/null || echo "$path"
-    else
-        # Fallback for Windows
-        (cd "$(dirname "$path")" 2>/dev/null && echo "$PWD/$(basename "$path")") || echo "$path"
-    fi
-}
-
-# Package manager detection
-get_package_manager() {
-    case "$PLATFORM" in
-        termux)
-            echo "pkg"
-            ;;
-        linux)
-            if command -v apt-get >/dev/null 2>&1; then
-                echo "apt"
-            elif command -v dnf >/dev/null 2>&1; then
-                echo "dnf"
-            elif command -v yum >/dev/null 2>&1; then
-                echo "yum"
-            elif command -v pacman >/dev/null 2>&1; then
-                echo "pacman"
-            elif command -v zypper >/dev/null 2>&1; then
-                echo "zypper"
-            else
-                echo "unknown"
-            fi
-            ;;
-        windows)
-            if command -v choco >/dev/null 2>&1; then
-                echo "choco"
-            elif command -v scoop >/dev/null 2>&1; then
-                echo "scoop"
-            elif command -v winget >/dev/null 2>&1; then
-                echo "winget"
-            else
-                echo "manual"
-            fi
-            ;;
-    esac
+${NC}${BLU}Cross-Platform File Runner${NC} ${MAG}[$OS]${NC}"
 }
 
 # Interactive Setup
 setup_config() {
-    echo -e "${YEL}🔧 Initial Runix setup...${NC}"
-    
-    # Create config atomically
+    echo -e "${YEL}🔧 Initial Runix setup for $OS...${NC}"
     {
-        echo "user_folder=${DEFAULT_USER_FOLDER}"
-        echo "preview=ask"
-        echo "save_binaries=no"
+        echo "user_folder=$DEFAULT_USER_FOLDER"
+        echo "os=$OS"
+        echo "version=2.0"
     } > "$CONFIG_FILE"
 
-    echo -e "${YEL}👁️  Choose preview mode:${NC}"
+    echo -e "${YEL}👁️ Choose preview mode:${NC}"
     echo -e "   ${GRN}[1]${NC} Always preview"
     echo -e "   ${GRN}[2]${NC} Never preview"
-    echo -e "   ${GRN}[3]${NC} Ask every time (default)"
-    
-    read -r -t 30 CHOICE || CHOICE=3
+    echo -e "   ${GRN}[3]${NC} Ask every time"
+    read -r CHOICE
     case "$CHOICE" in
-        1) safe_sed_replace 's/^preview=.*/preview=auto/' "$CONFIG_FILE" ;;
-        2) safe_sed_replace 's/^preview=.*/preview=never/' "$CONFIG_FILE" ;;
-        *) ;; # Keep default
+        1) echo "preview=auto" >> "$CONFIG_FILE" ;;
+        2) echo "preview=never" >> "$CONFIG_FILE" ;;
+        *) echo "preview=ask" >> "$CONFIG_FILE" ;;
     esac
 
-    echo -e "${BLU}🧱 Save compiled binaries? (y/n, default: n): ${NC}"
-    read -r -t 30 KEEP || KEEP="n"
-    if [[ "${KEEP,,}" =~ ^y ]]; then
-        safe_sed_replace 's/^save_binaries=.*/save_binaries=yes/' "$CONFIG_FILE"
+    echo -e "${BLU}🧱 Save compiled binaries after running? (y/n): ${NC}"
+    read -r KEEP
+    if [[ "$KEEP" =~ ^[yY]$ ]]; then
+        echo "save_binaries=yes" >> "$CONFIG_FILE"
+    else
+        echo "save_binaries=no" >> "$CONFIG_FILE"
     fi
 
-    touch "$SHORTCUT_FILE"
-    log "Initial setup completed for $PLATFORM"
+    echo -e "${BLU}📊 Enable execution statistics? (y/n): ${NC}"
+    read -r STATS
+    if [[ "$STATS" =~ ^[yY]$ ]]; then
+        echo "show_stats=yes" >> "$CONFIG_FILE"
+    else
+        echo "show_stats=no" >> "$CONFIG_FILE"
+    fi
+
+    touch "$SHORTCUT_FILE" "$HISTORY_FILE"
+    log "Initial setup completed"
 }
 
-# Load Config with defaults
+# Load Config
 load_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
         setup_config
     fi
     
-    USER_FOLDER=$(grep '^user_folder=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- | head -n1 || echo "$DEFAULT_USER_FOLDER")
-    PREVIEW_MODE=$(grep '^preview=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- | head -n1 || echo "ask")
-    SAVE_BINARIES=$(grep '^save_binaries=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- | head -n1 || echo "no")
+    USER_FOLDER=$(grep '^user_folder=' "$CONFIG_FILE" | cut -d= -f2-)
+    PREVIEW_MODE=$(grep '^preview=' "$CONFIG_FILE" | cut -d= -f2-)
+    SAVE_BINARIES=$(grep '^save_binaries=' "$CONFIG_FILE" | cut -d= -f2-)
+    SHOW_STATS=$(grep '^show_stats=' "$CONFIG_FILE" | cut -d= -f2-)
     
-    # Validate and set defaults
+    # Set defaults if missing
     USER_FOLDER="${USER_FOLDER:-$DEFAULT_USER_FOLDER}"
     PREVIEW_MODE="${PREVIEW_MODE:-ask}"
     SAVE_BINARIES="${SAVE_BINARIES:-no}"
+    SHOW_STATS="${SHOW_STATS:-yes}"
 }
 load_config
 
-# Shortcuts with validation
+# Shortcuts
 expand_shortcut() {
-    local key="$1"
-    if [[ -f "$SHORTCUT_FILE" ]] && grep -q "^${key}=" "$SHORTCUT_FILE" 2>/dev/null; then
-        grep "^${key}=" "$SHORTCUT_FILE" 2>/dev/null | head -n1 | cut -d= -f2- || echo "$key"
+    if grep -q "^$1=" "$SHORTCUT_FILE" 2>/dev/null; then
+        grep "^$1=" "$SHORTCUT_FILE" | head -n1 | cut -d= -f2-
     else
-        echo "$key"
+        echo "$1"
     fi
 }
 
-# Platform-specific package mapping
-get_platform_package() {
-    local generic_name="$1"
-    
-    case "${PLATFORM}:${generic_name}" in
-        termux:gcc|termux:clang|termux:g++|termux:clang++) echo "clang" ;;
-        termux:python3|termux:python) echo "python" ;;
-        termux:java|termux:javac) echo "openjdk-17" ;;
-        linux:gcc) echo "gcc" ;;
-        linux:g++) echo "g++" ;;
-        linux:python3|linux:python) echo "python3" ;;
-        linux:java|linux:javac) echo "default-jdk" ;;
-        linux:node) echo "nodejs" ;;
-        linux:rustc) echo "cargo" ;;
-        linux:go) echo "golang" ;;
-        windows:gcc|windows:g++) echo "mingw" ;;
-        windows:python3|windows:python) echo "python" ;;
-        windows:java|windows:javac) echo "openjdk" ;;
-        windows:node) echo "nodejs" ;;
-        windows:rustc) echo "rust" ;;
-        windows:go) echo "golang" ;;
-        *) echo "$generic_name" ;;
-    esac
-}
-
-# Dependency check with installation
-need_pkg() {
-    local cmd="$1"
-    local generic_pkg="$2"
-    
-    if command -v "$cmd" >/dev/null 2>&1; then
-        return 0
-    fi
-    
-    local platform_pkg
-    platform_pkg=$(get_platform_package "$generic_pkg")
-    
-    echo -e "${RED}❌ Missing: $cmd${NC}"
-    echo -ne "${YEL}Install '$platform_pkg'? (y/n): ${NC}"
-    read -r -t 30 ans || ans="n"
-    
-    if [[ "${ans,,}" =~ ^y ]]; then
-        install_package "$platform_pkg" || return 1
-        command -v "$cmd" >/dev/null 2>&1 || return 1
-    else
-        log "User declined to install: $cmd"
-        return 1
-    fi
-}
-
+# OS-specific package installation
 install_package() {
     local pkg="$1"
-    local pm
-    pm=$(get_package_manager)
+    echo -e "${YEL}Installing $pkg for $OS...${NC}"
     
-    echo -e "${YEL}📦 Installing $pkg via $pm...${NC}"
-    
-    case "$pm" in
-        pkg) pkg install -y "$pkg" ;;
-        apt) sudo apt-get update && sudo apt-get install -y "$pkg" ;;
-        dnf|yum) sudo "$pm" install -y "$pkg" ;;
-        pacman) sudo pacman -S --noconfirm "$pkg" ;;
-        zypper) sudo zypper install -y "$pkg" ;;
-        choco) choco install -y "$pkg" ;;
-        scoop) scoop install "$pkg" ;;
-        winget) winget install "$pkg" ;;
-        manual|*)
-            echo -e "${YEL}📦 Manual installation required${NC}"
-            echo -e "Search: https://www.google.com/search?q=install+${pkg}+${PLATFORM}"
-            return 1
+    case "$OS" in
+        termux)
+            pkg install -y "$pkg"
             ;;
-    esac
-}
-
-# File search with depth limit
-find_file() {
-    local fname="$1"
-    local found_files=()
-    local max_depth=10
-    
-    # Use find with depth limit to avoid deep recursion
-    while IFS= read -r file; do
-        found_files+=("$file")
-        [[ ${#found_files[@]} -ge 50 ]] && break
-    done < <(find "$USER_FOLDER" -maxdepth "$max_depth" -type f -name "*${fname}*" 2>/dev/null | head -n 50)
-    
-    # Fallback if find fails
-    if [[ ${#found_files[@]} -eq 0 ]]; then
-        while IFS= read -r file; do
-            found_files+=("$file")
-            [[ ${#found_files[@]} -ge 50 ]] && break
-        done < <(find "$USER_FOLDER" -type f 2>/dev/null | grep -i "$fname" | head -n 50)
-    fi
-    
-    case ${#found_files[@]} in
-        0) return 1 ;;
-        1) echo "${found_files[0]}" ;;
-        *)
-            if command -v fzf >/dev/null 2>&1; then
-                printf '%s\n' "${found_files[@]}" | fzf --prompt="Select file: " --height 20
+        linux)
+            if command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get install -y "$pkg"
+            elif command -v yum >/dev/null 2>&1; then
+                sudo yum install -y "$pkg"
+            elif command -v dnf >/dev/null 2>&1; then
+                sudo dnf install -y "$pkg"
+            elif command -v pacman >/dev/null 2>&1; then
+                sudo pacman -S --noconfirm "$pkg"
             else
-                echo -e "${YEL}📝 Multiple files found:${NC}" >&2
-                local i=1
-                for file in "${found_files[@]}"; do
-                    echo -e "${GRN}[$i]${NC} $file" >&2
-                    ((i++))
-                done
-                echo -ne "${BLU}Select [1-${#found_files[@]}]: ${NC}" >&2
-                read -r -t 30 choice || choice=1
-                if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#found_files[@]})); then
-                    echo "${found_files[$((choice-1))]}"
-                else
-                    echo "${found_files[0]}"
-                fi
+                echo -e "${RED}No supported package manager found${NC}"
+                return 1
+            fi
+            ;;
+        macos)
+            if command -v brew >/dev/null 2>&1; then
+                brew install "$pkg"
+            else
+                echo -e "${RED}Homebrew not installed. Visit https://brew.sh${NC}"
+                return 1
+            fi
+            ;;
+        windows)
+            if command -v choco >/dev/null 2>&1; then
+                choco install -y "$pkg"
+            else
+                echo -e "${RED}Chocolatey not installed. Visit https://chocolatey.org${NC}"
+                return 1
             fi
             ;;
     esac
 }
 
-# Java main class finder (robust)
+# Dependency Check
+need_pkg() {
+    local cmd="$1"
+    local pkg="${2:-$1}"
+    
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo -e "${RED}❌ Missing '$cmd'${NC}"
+        echo -ne "${YEL}Install '$pkg' now? (y/n): ${NC}"
+        read -r ans
+        if [[ "$ans" =~ ^[yY]$ ]]; then
+            install_package "$pkg" || return 1
+        else
+            echo -e "${RED}Cannot continue without '$cmd'${NC}"
+            log "Missing dependency: $cmd"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# File Search with OS-specific optimizations
+find_file() {
+    local fname="$1"
+    local search_dir="${2:-$USER_FOLDER}"
+    
+    # Use fd if available (faster than find)
+    if command -v fd >/dev/null 2>&1; then
+        local results
+        results=$(fd -t f -i "$fname" "$search_dir" 2>/dev/null)
+    else
+        local results
+        results=$(find "$search_dir" -type f -iname "*$fname*" 2>/dev/null)
+    fi
+    
+    if [[ -z "$results" ]]; then
+        echo ""
+        return 1
+    fi
+    
+    # Use fzf for interactive selection if available
+    if command -v fzf >/dev/null 2>&1 && [[ $(echo "$results" | wc -l) -gt 1 ]]; then
+        echo "$results" | fzf --prompt="Choose file: " --height=20 --border
+    else
+        echo "$results" | head -n 1
+    fi
+}
+
+# Java main class finder
 find_java_main_class() {
     local file="$1"
-    local class_name=""
-    local has_main=0
-    
-    while IFS= read -r line; do
-        if [[ "$line" =~ public[[:space:]]+class[[:space:]]+([A-Za-z0-9_]+) ]]; then
-            class_name="${BASH_REMATCH[1]}"
-        fi
-        if [[ "$line" =~ public[[:space:]]+static[[:space:]]+void[[:space:]]+main ]]; then
-            has_main=1
-        fi
-        if [[ -n "$class_name" ]] && [[ $has_main -eq 1 ]]; then
-            echo "$class_name"
-            return 0
-        fi
-    done < "$file"
-    
-    [[ -n "$class_name" ]] && echo "$class_name" && return 0
-    return 1
+    grep -E 'public\s+class\s+\w+' "$file" | \
+        grep -B 2 'public\s+static\s+void\s+main' | \
+        grep 'public\s+class' | \
+        sed -E 's/.*public\s+class\s+([A-Za-z0-9_]+).*/\1/' | \
+        head -n 1
 }
 
-# Show info
+# Show system info
 show_info() {
     echo -e "${YEL}🔧 Runix Configuration:${NC}"
-    echo "• Platform        : $PLATFORM"
-    echo "• User folder     : $USER_FOLDER"
-    echo "• Preview mode    : $PREVIEW_MODE"
-    echo "• Save binaries   : $SAVE_BINARIES"
-    echo "• Config file     : $CONFIG_FILE"
-    echo "• Shortcut file   : $SHORTCUT_FILE"
-    echo "• Binary dir      : $BIN_DIR"
-    echo "• Package manager : $(get_package_manager)"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "• Operating System : $OS"
+    echo "• User folder      : $USER_FOLDER"
+    echo "• Preview mode     : $PREVIEW_MODE"
+    echo "• Save binaries    : $SAVE_BINARIES"
+    echo "• Show statistics  : $SHOW_STATS"
+    echo "• Config file      : $CONFIG_FILE"
+    echo "• Binary directory : $BIN_DIR"
+    echo "• Log directory    : $LOG_DIR"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    
+    # OS-specific features
+    case "$OS" in
+        termux)
+            echo -e "${MAG}Termux Features: Storage access, Termux-API support${NC}"
+            ;;
+        linux)
+            echo -e "${MAG}Linux Features: System-wide installation, sudo support${NC}"
+            ;;
+        macos)
+            echo -e "${MAG}macOS Features: Homebrew integration, Spotlight indexing${NC}"
+            ;;
+        windows)
+            echo -e "${MAG}Windows Features: PowerShell integration, WSL support${NC}"
+            ;;
+    esac
 }
 
-# Compile function with proper error handling
+# Compile with OS-specific optimizations
 compile() {
     local ext="$1"
     local file="$2"
     local out="$3"
     
-    echo -e "${YEL}🔨 Compiling...${NC}"
+    echo -e "${YEL}⚙️  Compiling $file...${NC}"
     
     case "$ext" in
         c)
-            if need_pkg gcc gcc || need_pkg clang clang; then
-                local compiler
-                compiler=$(command -v gcc || command -v clang)
-                "$compiler" -fsyntax-only "$file" || return 1
-                "$compiler" "$file" -o "$out" || return 1
+            need_pkg gcc gcc || need_pkg clang clang || return 1
+            if command -v clang >/dev/null 2>&1; then
+                clang -Wall -O2 "$file" -o "$out"
             else
-                return 1
+                gcc -Wall -O2 "$file" -o "$out"
             fi
             ;;
         cpp|cc|cxx)
-            if need_pkg g++ g++ || need_pkg clang++ clang++; then
-                local compiler
-                compiler=$(command -v g++ || command -v clang++)
-                "$compiler" -fsyntax-only "$file" || return 1
-                "$compiler" "$file" -o "$out" || return 1
+            need_pkg g++ g++ || need_pkg clang++ clang || return 1
+            if command -v clang++ >/dev/null 2>&1; then
+                clang++ -Wall -O2 -std=c++17 "$file" -o "$out"
             else
-                return 1
+                g++ -Wall -O2 -std=c++17 "$file" -o "$out"
             fi
             ;;
         py)
-            if need_pkg python3 python3 || need_pkg python python; then
-                local python_cmd
-                python_cmd=$(command -v python3 || command -v python)
-                "$python_cmd" -m py_compile "$file" || return 1
-            else
-                return 1
-            fi
+            need_pkg python3 python3 || need_pkg python python || return 1
+            python3 -m py_compile "$file" 2>/dev/null || python -m py_compile "$file"
             ;;
         java)
-            need_pkg javac javac || return 1
-            javac "$file" -d "$BIN_DIR" || return 1
-            # Verify class file was created
-            local class_name
-            class_name=$(find_java_main_class "$file")
-            [[ -f "${BIN_DIR}/${class_name}.class" ]] || return 1
+            need_pkg javac openjdk || return 1
+            javac "$file" -d "$BIN_DIR"
             ;;
         js)
-            need_pkg node node || return 1
+            need_pkg node nodejs || return 1
+            # Syntax check
+            node --check "$file"
             ;;
-        sh)
-            bash -n "$file" || return 1
+        ts)
+            need_pkg tsc typescript || return 1
+            tsc "$file" --outDir "$BIN_DIR"
             ;;
         rs)
-            need_pkg rustc rustc || return 1
-            rustc "$file" -o "$out" || return 1
+            need_pkg rustc rust || return 1
+            rustc -O "$file" -o "$out"
             ;;
         go)
-            need_pkg go go || return 1
-            go build -o "$out" "$file" || return 1
+            need_pkg go golang || return 1
+            go build -o "$out" "$file"
             ;;
-        php)
-            need_pkg php php || return 1
-            php -l "$file" >/dev/null || return 1
+        cs)
+            if [[ "$OS" == "windows" ]]; then
+                need_pkg csc dotnet-sdk || return 1
+                csc "/out:$out.exe" "$file"
+            else
+                need_pkg mcs mono || return 1
+                mcs "$file" -out:"$out"
+            fi
             ;;
-        rb)
-            need_pkg ruby ruby || return 1
-            ruby -c "$file" >/dev/null || return 1
+        sh|bash)
+            need_pkg bash bash || return 1
+            bash -n "$file"  # Syntax check
             ;;
+        php|rb|pl)
+            ;; # Interpreted, no compilation
         *)
-            echo -e "${RED}❌ Unknown extension: $ext${NC}" >&2
+            echo -e "${RED}❌ Unsupported file extension: $ext${NC}"
+            log "Unsupported extension: $ext"
             return 1
             ;;
     esac
     
-    echo -e "${GRN}✅ Compiled successfully${NC}"
+    echo -e "${GRN}✅ Compilation successful${NC}"
+    log "Compiled: $file"
     return 0
 }
 
-# Execute function
+# Execute with OS-specific handling
 execute() {
     local ext="$1"
     local file="$2"
     local out="$3"
     
-    echo -e "${YEL}▶️  Executing...${NC}"
+    echo -e "${YEL}▶️  Executing $file...${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     
     case "$ext" in
         c|cpp|cc|cxx|rs|go)
-            if [[ ! -f "$out" ]]; then
-                echo -e "${RED}❌ Binary not found: $out${NC}" >&2
-                return 1
+            if [[ "$OS" == "windows" ]]; then
+                "$out.exe"
+            else
+                "$out"
             fi
-            [[ "$PLATFORM" != "windows" ]] && chmod +x "$out" 2>/dev/null || true
-            "$out"
             ;;
         py)
-            local python_cmd
-            python_cmd=$(command -v python3 || command -v python)
-            need_pkg "$python_cmd" python3 || return 1
-            "$python_cmd" "$file"
+            if command -v python3 >/dev/null 2>&1; then
+                python3 "$file"
+            else
+                python "$file"
+            fi
             ;;
         java)
-            need_pkg java java || return 1
             local main_class
-            main_class=$(find_java_main_class "$file") || {
-                echo -e "${RED}❌ No main class found${NC}" >&2
+            main_class=$(find_java_main_class "$file")
+            if [[ -n "$main_class" ]]; then
+                java -cp "$BIN_DIR" "$main_class"
+            else
+                echo -e "${RED}❌ No main class found${NC}"
                 return 1
-            }
-            java -cp "$BIN_DIR" "$main_class"
+            fi
             ;;
         js)
-            need_pkg node node || return 1
             node "$file"
             ;;
-        sh) bash "$file" ;;
+        ts)
+            local js_file="${file%.ts}.js"
+            if [[ -f "$BIN_DIR/$js_file" ]]; then
+                node "$BIN_DIR/$js_file"
+            else
+                need_pkg ts-node typescript || return 1
+                ts-node "$file"
+            fi
+            ;;
+        sh|bash)
+            bash "$file"
+            ;;
         php)
             need_pkg php php || return 1
             php "$file"
@@ -508,451 +420,703 @@ execute() {
             need_pkg ruby ruby || return 1
             ruby "$file"
             ;;
+        pl)
+            need_pkg perl perl || return 1
+            perl "$file"
+            ;;
+        cs)
+            if [[ "$OS" == "windows" ]]; then
+                "$out.exe"
+            else
+                mono "$out"
+            fi
+            ;;
         *)
-            echo -e "${RED}❌ Unknown extension: $ext${NC}" >&2
+            echo -e "${RED}❌ Unsupported execution for: $ext${NC}"
             return 1
             ;;
     esac
+    
+    local exit_code=$?
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    
+    if [[ $exit_code -eq 0 ]]; then
+        echo -e "${GRN}✅ Execution completed (exit code: $exit_code)${NC}"
+    else
+        echo -e "${RED}❌ Execution failed (exit code: $exit_code)${NC}"
+    fi
+    
+    log "Executed: $file (exit: $exit_code)"
+    return $exit_code
 }
 
 # Main run function
 run_file() {
     local input="$1"
-    local mode="${2:-cr}"
+    local mode="${2:-}"
     
     input=$(expand_shortcut "$input")
     
     local file
-    file=$(find_file "$input") || {
-        echo -e "${RED}❌ File not found: $input${NC}" >&2
+    file=$(find_file "$input")
+    
+    if [[ -z "$file" ]]; then
+        echo -e "${RED}❌ File not found: $input${NC}"
         log "File not found: $input"
         return 1
-    }
-
-    [[ ! -f "$file" ]] && error_exit "Not a file: $file"
+    fi
 
     local ext="${file##*.}"
     local base="${file%.*}"
-    local out="${BIN_DIR}/$(basename "$base")"
-    
-    # Platform-specific binary extension
-    if [[ "$PLATFORM" == "windows" ]]; then
-        case "$ext" in
-            c|cpp|cc|cxx|rs|go) out="${out}.exe" ;;
-        esac
-    fi
+    local out="$BIN_DIR/$(basename "$base")"
 
     echo -e "${BLU}📁 File: $file${NC}"
+    echo -e "${BLU}📊 Size: $(du -h "$file" | cut -f1)${NC}"
     
-    # Save and change directory
-    local original_dir="$PWD"
-    cd "$(dirname "$file")" || error_exit "Cannot access directory: $(dirname "$file")"
+    # Save to history
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | $file" >> "$HISTORY_FILE"
+    
+    # Change to file directory
+    local file_dir
+    file_dir=$(dirname "$file")
+    pushd "$file_dir" > /dev/null || return 1
 
+    # Start timing and memory tracking
     local start_time
     start_time=$(date +%s)
-    local result=0
+    local start_mem=0
+    
+    if [[ "$SHOW_STATS" == "yes" ]]; then
+        if command -v ps >/dev/null 2>&1; then
+            start_mem=$(ps -o rss= -p $$ 2>/dev/null || echo 0)
+        fi
+    fi
 
-    case "${mode,,}" in
-        c)
-            compile "$ext" "$file" "$out" || result=$?
+    # Execute based on mode
+    case "$mode" in
+        c|compile)
+            compile "$ext" "$file" "$out"
             ;;
-        r)
-            execute "$ext" "$file" "$out" || result=$?
-            ;;
-        cr|rc|"")
-            if compile "$ext" "$file" "$out"; then
-                execute "$ext" "$file" "$out" || result=$?
-            else
-                result=$?
-            fi
+        r|run)
+            execute "$ext" "$file" "$out"
             ;;
         *)
-            echo -e "${RED}❌ Unknown mode: $mode${NC}" >&2
-            cd "$original_dir"
-            return 1
+            compile "$ext" "$file" "$out" && execute "$ext" "$file" "$out"
             ;;
     esac
+    
+    local exit_code=$?
 
-    local end_time
-    end_time=$(date +%s)
-    echo -e "${YEL}⏱️  Time: $((end_time - start_time))s${NC}"
+    # Calculate statistics
+    if [[ "$SHOW_STATS" == "yes" ]]; then
+        local end_time
+        end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        
+        local mem_used=0
+        if command -v ps >/dev/null 2>&1; then
+            local end_mem
+            end_mem=$(ps -o rss= -p $$ 2>/dev/null || echo 0)
+            mem_used=$((end_mem - start_mem))
+        fi
+        
+        echo -e "${YEL}📊 Statistics:${NC}"
+        echo -e "   ⏱️  Time: ${duration}s"
+        if [[ $mem_used -gt 0 ]]; then
+            echo -e "   🧠 Memory: ${mem_used}KB"
+        fi
+    fi
 
     # Preview output files
+    preview_outputs
+
+    # Cleanup
+    if [[ "$SAVE_BINARIES" != "yes" && -f "$out" ]]; then
+        rm -f "$out"
+    fi
+    
+    popd > /dev/null
+    return $exit_code
+}
+
+# Preview output files
+preview_outputs() {
     local preview_files=()
-    for pext in $PREVIEW_EXTENSIONS; do
-        while IFS= read -r -d '' f; do
-            preview_files+=("$f")
-        done < <(find . -maxdepth 1 -type f -name "*.${pext}" -print0 2>/dev/null)
+    
+    for ext in $PREVIEW_EXTENSIONS; do
+        while IFS= read -r f; do
+            [[ -f "$f" ]] && preview_files+=("$f")
+        done < <(find . -maxdepth 1 -type f -name "*.$ext" 2>/dev/null)
     done
 
     if [[ ${#preview_files[@]} -gt 0 ]]; then
         local do_preview="n"
+        
         case "$PREVIEW_MODE" in
             auto) do_preview="y" ;;
             never) do_preview="n" ;;
             *)
-                echo -ne "${BLU}👁️  View output files? (y/n): ${NC}"
-                read -r -t 30 do_preview || do_preview="n"
+                echo -ne "${BLU}👁️  Preview ${#preview_files[@]} output file(s)? (y/n): ${NC}"
+                read -r do_preview
                 ;;
         esac
         
-        if [[ "${do_preview,,}" =~ ^y ]]; then
+        if [[ "$do_preview" =~ ^[yY]$ ]]; then
             for f in "${preview_files[@]}"; do
-                echo -e "\n${CYAN}=== $(basename "$f") ===${NC}"
+                echo -e "${CYAN}━━━ $f ━━━${NC}"
                 if command -v bat >/dev/null 2>&1; then
-                    bat "$f" 2>/dev/null || cat "$f"
+                    bat --style=plain --paging=never "$f"
                 elif command -v pygmentize >/dev/null 2>&1; then
-                    pygmentize "$f" 2>/dev/null || cat "$f"
+                    pygmentize "$f"
                 else
-                    cat "$f"
+                    head -n 50 "$f"
                 fi
             done
         fi
     fi
-
-    # Cleanup
-    if [[ "$SAVE_BINARIES" != "yes" ]] && [[ -f "$out" ]]; then
-        rm -f "$out" 2>/dev/null || true
-    fi
-
-    cd "$original_dir"
-    return "$result"
 }
 
 # Clean compiled files
 clean_bin() {
-    echo -e "${YEL}🧹 Cleaning...${NC}"
+    echo -e "${YEL}🧹 Cleaning compiled files...${NC}"
     
-    [[ -d "$BIN_DIR" ]] && find "$BIN_DIR" -type f -delete 2>/dev/null || true
-    find "$USER_FOLDER" -maxdepth 5 -type f -name "*.pyc" -delete 2>/dev/null || true
-    find "$USER_FOLDER" -maxdepth 5 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    rm -rf "${BIN_DIR:?}"/*
+    find "$USER_FOLDER" -type f \( -name "*.pyc" -o -name "*.class" -o -name "*.o" \
+        -o -name "*.rlib" -o -name "*.rmeta" -o -name "*.a" \) -delete 2>/dev/null
+    find "$USER_FOLDER" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
     
-    echo -e "${GRN}✅ Cleaned${NC}"
+    echo -e "${GRN}✅ Cleanup complete${NC}"
     log "Cleaned compiled files"
 }
 
 # Run all files
 run_all() {
-    echo -e "${YEL}🚀 Running all files...${NC}"
-    local count=0 failed=0
+    local count=0
+    local success=0
+    
+    echo -e "${YEL}🚀 Running all supported files in $USER_FOLDER...${NC}"
     
     while IFS= read -r file; do
         case "$file" in
-            *.c|*.cpp|*.cc|*.cxx|*.py|*.java|*.js|*.sh|*.rs|*.go|*.php|*.rb)
-                echo -e "\n${CYAN}>>> $(basename "$file")${NC}"
-                if run_file "$(basename "$file")" ""; then
-                    ((count++))
-                else
-                    ((failed++))
+            *.c|*.cpp|*.cc|*.cxx|*.py|*.java|*.js|*.ts|*.sh|*.rs|*.go|*.php|*.rb|*.pl|*.cs)
+                ((count++))
+                echo -e "\n${CYAN}[$count] Processing: $file${NC}"
+                if run_file "$(basename "$file")"; then
+                    ((success++))
                 fi
                 ;;
         esac
-    done < <(find "$USER_FOLDER" -maxdepth 5 -type f 2>/dev/null)
+    done < <(find "$USER_FOLDER" -type f 2>/dev/null)
     
-    echo -e "\n${GRN}✅ Success: $count${NC}"
-    [[ $failed -gt 0 ]] && echo -e "${RED}❌ Failed: $failed${NC}"
+    echo -e "\n${GRN}✅ Completed: $success/$count files successful${NC}"
 }
 
 # Search files
 search_file() {
-    echo -ne "${BLU}🔍 Search term: ${NC}"
-    read -r -t 60 name || return
+    echo -ne "${BLU}🔍 Filename to search: ${NC}"
+    read -r name
     
-    [[ -z "$name" ]] && echo -e "${YEL}Empty search${NC}" && return
+    echo -e "${YEL}🔎 Searching in $USER_FOLDER...${NC}"
     
-    echo -e "${YEL}🔎 Searching...${NC}"
-    local found=0
-    
+    local count=0
     while IFS= read -r f; do
-        local size
-        size=$(du -h "$f" 2>/dev/null | cut -f1 || echo "?")
-        local ftype
-        ftype=$(file -b "$f" 2>/dev/null || echo "unknown")
-        echo -e "${GRN}• $(basename "$f")${NC}"
-        echo "  Type: $ftype | Size: $size"
-        echo "  Path: $f"
-        found=1
-    done < <(find "$USER_FOLDER" -maxdepth 10 -type f -name "*${name}*" 2>/dev/null | head -n 20)
+        ((count++))
+        local size type modified
+        size=$(du -h "$f" 2>/dev/null | cut -f1)
+        type=$(file -b "$f" 2>/dev/null || echo "Unknown")
+        
+        if [[ "$OS" == "macos" ]]; then
+            modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$f" 2>/dev/null)
+        else
+            modified=$(stat -c "%y" "$f" 2>/dev/null | cut -d'.' -f1)
+        fi
+        
+        echo -e "${GRN}[$count] $(basename "$f")${NC}"
+        echo -e "    Type: $type | Size: $size | Modified: $modified"
+        echo -e "    Path: $f"
+    done < <(find "$USER_FOLDER" -type f -iname "*$name*" 2>/dev/null)
     
-    [[ $found -eq 0 ]] && echo -e "${YEL}No matches${NC}"
+    if [[ $count -eq 0 ]]; then
+        echo -e "${RED}No files found${NC}"
+    fi
 }
 
 # Change settings
 change_settings() {
-    echo -e "${YEL}⚙️  Settings${NC}\n"
+    echo -e "${YEL}⚙️  Reconfigure Runix${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     
-    echo -ne "${BLU}📁 User folder [${USER_FOLDER}]: ${NC}"
-    read -r -t 60 folder || folder=""
-    if [[ -n "$folder" ]] && [[ -d "$folder" ]]; then
-        USER_FOLDER="$folder"
-    elif [[ -n "$folder" ]]; then
-        echo -e "${YEL}⚠️  Directory not found${NC}"
-    fi
-    
-    echo -e "\n${YEL}👁️  Preview:${NC}"
+    echo -ne "${BLU}📁 User folder [$USER_FOLDER]: ${NC}"
+    read -r folder
+    [[ -n "$folder" ]] && USER_FOLDER="$folder"
+    sed -i.bak '/^user_folder=/d' "$CONFIG_FILE"
+    echo "user_folder=$USER_FOLDER" >> "$CONFIG_FILE"
+
+    echo -e "${YEL}👁️  Preview mode:${NC}"
     echo -e "   ${GRN}[1]${NC} Always"
     echo -e "   ${GRN}[2]${NC} Never"
     echo -e "   ${GRN}[3]${NC} Ask"
-    read -r -t 30 choice || choice=""
+    read -r choice
+    sed -i.bak '/^preview=/d' "$CONFIG_FILE"
     case "$choice" in
-        1) PREVIEW_MODE="auto" ;;
-        2) PREVIEW_MODE="never" ;;
-        3) PREVIEW_MODE="ask" ;;
+        1) echo "preview=auto" >> "$CONFIG_FILE" ;;
+        2) echo "preview=never" >> "$CONFIG_FILE" ;;
+        *) echo "preview=ask" >> "$CONFIG_FILE" ;;
     esac
 
-    echo -ne "\n${BLU}🧱 Save binaries? (y/n) [${SAVE_BINARIES}]: ${NC}"
-    read -r -t 30 keep || keep=""
-    case "${keep,,}" in
-        y) SAVE_BINARIES="yes" ;;
-        n) SAVE_BINARIES="no" ;;
-    esac
+    echo -ne "${BLU}🧱 Save binaries? (y/n): ${NC}"
+    read -r keep
+    sed -i.bak '/^save_binaries=/d' "$CONFIG_FILE"
+    [[ "$keep" =~ ^[yY]$ ]] && echo "save_binaries=yes" >> "$CONFIG_FILE" || echo "save_binaries=no" >> "$CONFIG_FILE"
     
-    # Write config atomically
-    {
-        echo "user_folder=${USER_FOLDER}"
-        echo "preview=${PREVIEW_MODE}"
-        echo "save_binaries=${SAVE_BINARIES}"
-    } > "$CONFIG_FILE"
+    echo -ne "${BLU}📊 Show statistics? (y/n): ${NC}"
+    read -r stats
+    sed -i.bak '/^show_stats=/d' "$CONFIG_FILE"
+    [[ "$stats" =~ ^[yY]$ ]] && echo "show_stats=yes" >> "$CONFIG_FILE" || echo "show_stats=no" >> "$CONFIG_FILE"
     
-    echo -e "\n${GRN}✅ Saved${NC}"
-    log "Settings updated"
+    rm -f "$CONFIG_FILE.bak"
+    
+    echo -e "${GRN}✅ Settings updated${NC}"
+    load_config
 }
 
 # Add shortcut
 add_shortcut() {
     echo -ne "${BLU}🔑 Shortcut name: ${NC}"
-    read -r -t 60 key || return
-    [[ -z "$key" ]] && echo -e "${YEL}Empty name${NC}" && return
-    
+    read -r key
     echo -ne "${BLU}📄 Target file/command: ${NC}"
-    read -r -t 60 val || return
-    [[ -z "$val" ]] && echo -e "${YEL}Empty value${NC}" && return
+    read -r val
     
-    if grep -q "^${key}=" "$SHORTCUT_FILE" 2>/dev/null; then
-        echo -ne "${YEL}⚠️  Overwrite existing? (y/n): ${NC}"
-        read -r -t 30 ans || ans="n"
-        [[ ! "${ans,,}" =~ ^y ]] && echo "Cancelled" && return
-        safe_sed_replace "/^${key}=/d" "$SHORTCUT_FILE"
-    fi
-    
-    echo "${key}=${val}" >> "$SHORTCUT_FILE"
-    echo -e "${GRN}✅ Shortcut added: runix ${key} → ${val}${NC}"
-    log "Added shortcut: $key -> $val"
+    echo "$key=$val" >> "$SHORTCUT_FILE"
+    echo -e "${GRN}✅ Shortcut '$key' added${NC}"
+    log "Added shortcut: $key=$val"
 }
 
 # List shortcuts
 list_shortcuts() {
-    echo -e "${YEL}📝 Shortcuts:${NC}"
-    if [[ ! -f "$SHORTCUT_FILE" ]] || [[ ! -s "$SHORTCUT_FILE" ]]; then
-        echo -e "${YEL}None defined${NC}"
-        return
+    if [[ -s "$SHORTCUT_FILE" ]]; then
+        echo -e "${YEL}🔑 Configured Shortcuts:${NC}"
+        while IFS='=' read -r key val; do
+            echo -e "   ${GRN}$key${NC} → $val"
+        done < "$SHORTCUT_FILE"
+    else
+        echo -e "${YEL}No shortcuts configured${NC}"
     fi
-    
-    while IFS='=' read -r key val; do
-        [[ -z "$key" ]] && continue
-        echo -e "  ${GRN}${key}${NC} → ${val}"
-    done < "$SHORTCUT_FILE"
 }
 
-# Help
-show_help() {
-    cat << EOF
-${YEL}📘 Runix Commands:${NC}
-
-${CYAN}Running Files:${NC}
-  runix file.ext         ▶️  Compile & run
-  runix file.ext c       🔨 Compile only
-  runix file.ext r       ▶️  Run only
-
-${CYAN}Batch Operations:${NC}
-  runix runall           🚀 Run all files
-  runix clean            🧹 Clear binaries
-
-${CYAN}File Management:${NC}
-  runix search           🔍 Search files
-
-${CYAN}Configuration:${NC}
-  runix settings         ⚙️  Change settings
-  runix info             ℹ️  Show config
-
-${CYAN}Shortcuts:${NC}
-  runix shortcut         ➕ Add shortcut
-  runix shortcuts        📝 List shortcuts
-
-${CYAN}System:${NC}
-  runix install          📦 Install globally
-  runix uninstall        🗑️  Remove Runix
-  runix logs             📋 Show logs
-  runix version          🔖 Version info
-  runix help             ❓ This help
-
-${YEL}Supported Languages:${NC}
-  C, C++, Python, Java, JavaScript, Shell, Rust, Go, PHP, Ruby
-
-${YEL}Examples:${NC}
-  runix hello.c          # Compile and run
-  runix script.py        # Run Python
-  runix app.java c       # Compile only
-  runix hw               # Use shortcut
-EOF
+# Show history
+show_history() {
+    if [[ -s "$HISTORY_FILE" ]]; then
+        echo -e "${YEL}📜 Recent Executions:${NC}"
+        tail -n 20 "$HISTORY_FILE" | while IFS='|' read -r timestamp file; do
+            echo -e "   ${CYAN}$timestamp${NC} → $file"
+        done
+    else
+        echo -e "${YEL}No execution history${NC}"
+    fi
 }
 
 # Show logs
 show_logs() {
-    echo -e "${YEL}📋 Recent logs:${NC}"
-    if [[ -f "$LOG_FILE" ]] && [[ -s "$LOG_FILE" ]]; then
-        tail -n 20 "$LOG_FILE"
+    if [[ -f "$LOG_FILE" ]]; then
+        echo -e "${YEL}📋 Recent Logs:${NC}"
+        tail -n 30 "$LOG_FILE"
     else
         echo -e "${YEL}No logs found${NC}"
     fi
 }
 
-# Version info
-show_version() {
-    cat << EOF
-${CYAN}Universal Runix v2.0${NC}
-Platform: $PLATFORM
-Shell: ${BASH_VERSION}
-Package Manager: $(get_package_manager)
-Config: $CONFIG_FILE
-EOF
+# OS-specific features
+os_features() {
+    case "$OS" in
+        termux)
+            echo -e "${MAG}📱 Termux-specific features:${NC}"
+            echo "  1. Setup storage access"
+            echo "  2. Install Termux-API"
+            echo "  3. Create desktop widget"
+            read -r choice
+            case "$choice" in
+                1) termux-setup-storage ;;
+                2) pkg install termux-api ;;
+                3) echo -e "${YEL}Create widget manually via Termux:Widget app${NC}" ;;
+            esac
+            ;;
+        linux)
+            echo -e "${MAG}🐧 Linux-specific features:${NC}"
+            echo "  1. Install as system command"
+            echo "  2. Create desktop entry"
+            read -r choice
+            case "$choice" in
+                1)
+                    echo -e "${YEL}Creating system command...${NC}"
+                    sudo cp "$0" /usr/local/bin/runix
+                    sudo chmod +x /usr/local/bin/runix
+                    echo -e "${GRN}✅ Installed to /usr/local/bin/runix${NC}"
+                    ;;
+                2)
+                    echo -e "${YEL}Feature coming soon${NC}"
+                    ;;
+            esac
+            ;;
+        macos)
+            echo -e "${MAG}🍎 macOS-specific features:${NC}"
+            echo "  1. Add to PATH"
+            echo "  2. Create Spotlight index"
+            read -r choice
+            case "$choice" in
+                1)
+                    echo "export PATH=\"\$PATH:$BIN_DIR\"" >> ~/.zshrc
+                    echo -e "${GRN}✅ Added to ~/.zshrc${NC}"
+                    ;;
+                2)
+                    mdimport -i "$RUNIX_DIR"
+                    echo -e "${GRN}✅ Spotlight index created${NC}"
+                    ;;
+            esac
+            ;;
+        windows)
+            echo -e "${MAG}🪟 Windows-specific features:${NC}"
+            echo "  1. Add to PATH"
+            echo "  2. Create PowerShell alias"
+            echo "  3. WSL integration"
+            read -r choice
+            case "$choice" in
+                1)
+                    echo -e "${YEL}Add this to System Environment Variables:${NC}"
+                    echo "$BIN_DIR"
+                    ;;
+                2)
+                    local ps_profile="$HOME/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"
+                    mkdir -p "$(dirname "$ps_profile")"
+                    echo "Set-Alias -Name runix -Value '$0'" >> "$ps_profile"
+                    echo -e "${GRN}✅ PowerShell alias created${NC}"
+                    ;;
+                3)
+                    if command -v wsl >/dev/null 2>&1; then
+                        echo -e "${GRN}✅ WSL detected${NC}"
+                        wsl -l -v
+                    else
+                        echo -e "${RED}WSL not installed${NC}"
+                    fi
+                    ;;
+            esac
+            ;;
+    esac
 }
 
-# Install globally
-install_command() {
-    echo -e "${YEL}🔧 Installing runix...${NC}"
+# Benchmark mode
+benchmark() {
+    local file="$1"
+    local iterations="${2:-5}"
     
-    local script_path
-    script_path=$(get_realpath "$0")
+    echo -e "${YEL}🏃 Benchmarking $file ($iterations iterations)...${NC}"
     
-    [[ -z "$script_path" ]] || [[ ! -f "$script_path" ]] && error_exit "Cannot find script"
+    local total_time=0
+    local success_count=0
     
-    local install_path="${BIN_INSTALL_DIR}/runix"
-    
-    mkdir -p "$BIN_INSTALL_DIR" 2>/dev/null || true
-    
-    # Try symlink first
-    if [[ "$PLATFORM" != "windows" ]] && ln -sf "$script_path" "$install_path" 2>/dev/null; then
-        chmod +x "$install_path" 2>/dev/null || true
-        echo -e "${GRN}✅ Installed (symlink): $install_path${NC}"
-    else
-        # Fallback to copy
-        if cp "$script_path" "$install_path" 2>/dev/null; then
-            chmod +x "$install_path" 2>/dev/null || true
-            echo -e "${GRN}✅ Installed (copy): $install_path${NC}"
-        else
-            error_exit "Installation failed"
+    for ((i=1; i<=iterations; i++)); do
+        echo -e "${CYAN}Run $i/$iterations${NC}"
+        local start
+        start=$(date +%s)
+        
+        if run_file "$file" > /dev/null 2>&1; then
+            ((success_count++))
         fi
+        
+        local end
+        end=$(date +%s)
+        local duration=$((end - start))
+        total_time=$((total_time + duration))
+        
+        echo -e "   Time: ${duration}s"
+    done
+    
+    local avg_time=$((total_time / iterations))
+    
+    echo -e "${GRN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YEL}Benchmark Results:${NC}"
+    echo -e "   Total time: ${total_time}s"
+    echo -e "   Average time: ${avg_time}s"
+    echo -e "   Success rate: $success_count/$iterations"
+    echo -e "${GRN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+
+# Watch mode - auto-rerun on file changes
+watch_mode() {
+    local file="$1"
+    
+    if ! command -v inotifywait >/dev/null 2>&1 && ! command -v fswatch >/dev/null 2>&1; then
+        echo -e "${RED}❌ Watch mode requires inotifywait (Linux) or fswatch (macOS)${NC}"
+        return 1
     fi
     
-    # Check PATH
-    if [[ ":$PATH:" != *":$BIN_INSTALL_DIR:"* ]]; then
-        echo -e "\n${YEL}⚠️  Add to PATH:${NC}"
-        echo -e "${CYAN}export PATH=\"\$PATH:$BIN_INSTALL_DIR\"${NC}"
-        echo -e "Add to ~/.bashrc or ~/.zshrc, then: ${CYAN}source ~/.bashrc${NC}"
+    echo -e "${YEL}👁️  Watching $file for changes (Ctrl+C to stop)...${NC}"
+    
+    # Initial run
+    run_file "$file"
+    
+    if command -v inotifywait >/dev/null 2>&1; then
+        while inotifywait -e modify "$file" 2>/dev/null; do
+            echo -e "${CYAN}━━━ File changed, rerunning... ━━━${NC}"
+            run_file "$file"
+        done
     else
-        echo -e "${GRN}✅ PATH already configured${NC}"
+        fswatch -o "$file" | while read -r; do
+            echo -e "${CYAN}━━━ File changed, rerunning... ━━━${NC}"
+            run_file "$file"
+        done
     fi
+}
+
+# Interactive mode
+interactive_mode() {
+    echo -e "${YEL}🎮 Interactive Mode (type 'exit' to quit)${NC}"
     
-    log "Installed runix command"
+    while true; do
+        echo -ne "${BLU}runix> ${NC}"
+        read -r input
+        
+        case "$input" in
+            exit|quit|q) break ;;
+            "") continue ;;
+            *)
+                eval "run_file $input" || true
+                ;;
+        esac
+    done
+}
+
+# Export project
+export_project() {
+    echo -ne "${BLU}📦 Project name: ${NC}"
+    read -r project_name
+    
+    local export_dir="$HOME/runix_export_${project_name}_$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$export_dir"
+    
+    echo -e "${YEL}Exporting project to $export_dir...${NC}"
+    
+    # Copy binaries
+    cp -r "$BIN_DIR"/* "$export_dir/" 2>/dev/null || true
+    
+    # Create README
+    cat > "$export_dir/README.md" << EOF
+# $project_name
+
+Exported from Runix on $(date)
+
+## System Information
+- OS: $OS
+- User folder: $USER_FOLDER
+
+## Files Included
+$(ls -1 "$export_dir")
+
+## Execution History
+$(tail -n 10 "$HISTORY_FILE" 2>/dev/null || echo "No history available")
+EOF
+    
+    echo -e "${GRN}✅ Project exported to $export_dir${NC}"
+}
+
+# Update Runix
+update_runix() {
+    echo -e "${YEL}🔄 Updating Runix...${NC}"
+    
+    local update_url="https://raw.githubusercontent.com/Peace-forever69/Runix/main/Runix"
+    local backup_file="$0.backup"
+    
+    # Create backup
+    cp "$0" "$backup_file"
+    
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsSL "$update_url" -o "$0"; then
+            chmod +x "$0"
+            echo -e "${GRN}✅ Updated successfully${NC}"
+            rm -f "$backup_file"
+        else
+            echo -e "${RED}❌ Update failed, restoring backup${NC}"
+            mv "$backup_file" "$0"
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if wget -q "$update_url" -O "$0"; then
+            chmod +x "$0"
+            echo -e "${GRN}✅ Updated successfully${NC}"
+            rm -f "$backup_file"
+        else
+            echo -e "${RED}❌ Update failed, restoring backup${NC}"
+            mv "$backup_file" "$0"
+        fi
+    else
+        echo -e "${RED}❌ curl or wget required for updates${NC}"
+        rm -f "$backup_file"
+    fi
 }
 
 # Uninstall
 uninstall_runix() {
-    cat << EOF
-${RED}⚠️  This will remove:${NC}
-  • Configuration: $RUNIX_DIR
-  • All binaries
-  • All shortcuts
-  • The runix command
-
-EOF
-    echo -ne "${RED}Type 'yes' to confirm: ${NC}"
-    read -r -t 30 confirm || confirm=""
+    echo -e "${RED}⚠️  Uninstall Runix? This will remove all data. (y/n): ${NC}"
+    read -r confirm
     
-    if [[ "$confirm" == "yes" ]]; then
-        echo -e "${YEL}🧹 Uninstalling...${NC}"
-        rm -f "${BIN_INSTALL_DIR}/runix" 2>/dev/null || true
-        rm -rf "$RUNIX_DIR" 2>/dev/null || true
-        echo -e "${GRN}✅ Uninstalled${NC}"
-        log "Uninstalled Runix"
-        exit 0
+    if [[ "$confirm" =~ ^[yY]$ ]]; then
+        echo -e "${YEL}Uninstalling...${NC}"
+        
+        # Remove system installations
+        case "$OS" in
+            linux)
+                sudo rm -f /usr/local/bin/runix 2>/dev/null
+                ;;
+            macos)
+                rm -f /usr/local/bin/runix 2>/dev/null
+                ;;
+        esac
+        
+        # Remove directories
+        rm -rf "$RUNIX_DIR"
+        
+        # Remove from shell configs
+        sed -i.bak '/runix/d' ~/.bashrc 2>/dev/null
+        sed -i.bak '/runix/d' ~/.zshrc 2>/dev/null
+        
+        echo -e "${GRN}✅ Uninstalled successfully${NC}"
+        log "Runix uninstalled"
     else
         echo -e "${YEL}Cancelled${NC}"
     fi
 }
 
-# Validate environment
-validate_environment() {
-    if [[ ! -d "$USER_FOLDER" ]]; then
-        echo -e "${RED}❌ User folder not found: $USER_FOLDER${NC}" >&2
-        echo -e "${YEL}Run: runix settings${NC}" >&2
-        return 1
-    fi
-    
-    if [[ ! -w "$RUNIX_DIR" ]]; then
-        echo -e "${RED}❌ Cannot write to: $RUNIX_DIR${NC}" >&2
-        return 1
-    fi
-    
-    return 0
+# Show help
+show_help() {
+    cat << EOF
+${YEL}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
+${GRN}📘 RUNIX - Cross-Platform File Runner${NC}
+${YEL}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
+
+${CYAN}Basic Commands:${NC}
+  run <file>              Compile and execute file
+  run <file> c            Compile only
+  run <file> r            Run only (skip compilation)
+  
+${CYAN}File Management:${NC}
+  run search              Search for files
+  run clean               Remove compiled binaries
+  run runall              Execute all supported files
+  run history             Show execution history
+  
+${CYAN}Configuration:${NC}
+  run settings            Change configuration
+  run info                Show current settings
+  run shortcuts           List all shortcuts
+  run shortcut            Add new shortcut
+  
+${CYAN}Advanced Features:${NC}
+  run watch <file>        Auto-rerun on file changes
+  run benchmark <file>    Benchmark file execution
+  run interactive         Enter interactive mode
+  run export              Export project
+  
+${CYAN}OS-Specific:${NC}
+  run os-features         Platform-specific features
+  
+${CYAN}System:${NC}
+  run logs                Show recent logs
+  run update              Update Runix
+  run uninstall           Remove Runix
+  run help                Show this help
+
+${CYAN}Supported Languages:${NC}
+  C, C++, Python, Java, JavaScript, TypeScript, Rust,
+  Go, C#, Shell, PHP, Ruby, Perl
+
+${YEL}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
+${MAG}Running on: $OS${NC}
+${YEL}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
+EOF
 }
 
-# Main function
+# Main command dispatcher
 main() {
-    local cmd="${1:-}"
-    local mode="${2:-}"
+    show_banner
     
-    # Convert to lowercase
-    cmd="${cmd,,}"
-    mode="${mode,,}"
+    local command="${1,,}"
+    shift || true
     
-    case "$cmd" in
+    case "$command" in
+        # Basic operations
+        c|compile)
+            run_file "$1" "c"
+            ;;
+        r|run)
+            run_file "$1" "r"
+            ;;
+        
+        # File management
         clean)
             clean_bin
             ;;
         runall)
-            validate_environment && run_all
+            run_all
             ;;
-        uninstall)
-            uninstall_runix
+        search)
+            search_file
             ;;
+        history)
+            show_history
+            ;;
+        
+        # Configuration
         settings|setup|config)
             change_settings
             ;;
         info)
             show_info
             ;;
-        search|find)
-            validate_environment && search_file
-            ;;
-        shortcut)
-            add_shortcut
-            ;;
-        shortcuts|list)
+        shortcuts)
             list_shortcuts
             ;;
-        install)
-            install_command
+        shortcut|add-shortcut)
+            add_shortcut
             ;;
-        help|--help|-h)
-            show_help
+        
+        # Advanced features
+        watch)
+            watch_mode "$1"
             ;;
-        logs|last-error)
+        benchmark|bench)
+            benchmark "$1" "${2:-5}"
+            ;;
+        interactive|i)
+            interactive_mode
+            ;;
+        export)
+            export_project
+            ;;
+        
+        # OS-specific
+        os-features|osf)
+            os_features
+            ;;
+        
+        # System
+        logs|log)
             show_logs
             ;;
-        version|-v|--version)
-            show_version
+        update)
+            update_runix
             ;;
-        "")
+        uninstall)
+            uninstall_runix
+            ;;
+        help|--help|-h|"")
             show_help
             ;;
+        
+        # Default: run file
         *)
-            # Run file
-            validate_environment && run_file "$1" "$mode"
+            run_file "$command" "$1"
             ;;
     esac
 }
 
-# Execute
+# Execute main function
 main "$@"
