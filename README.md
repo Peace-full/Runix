@@ -21,10 +21,44 @@ Runix is a powerful, interactive shell script for Android Termux that lets you c
 
 Open Termux and run:
 
+### Quick Install (Recommended)
+
+**Linux / macOS / WSL / Termux:**
 ```bash
-curl -s https://raw.githubusercontent.com/Peace-full/Runix/main/runix-installer.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Peace-full/Runix/main/runix-installer.sh | bash
 ```
 
+**Or with wget:**
+```bash
+wget -qO- https://raw.githubusercontent.com/Peace-full/Runix/main/runix-installer .sh | bash
+```
+
+### Manual Install
+
+1. Download the installer:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Peace-full/Runix/main/runix-installer -o install.sh
+chmod +x install.sh
+```
+
+2. Run the installer:
+```bash
+./install.sh
+```
+
+3. Follow the on-screen instructions
+
+### Installation Types
+
+- **User Installation** (Default): Installs to `~/.local` - No sudo required
+- **System Installation**: Installs to `/usr/local` - Requires sudo
+
+### Uninstall
+```bash
+bash ~/.local/share/runix/uninstall.sh
+# or for system install
+bash /usr/local/share/runix/uninstall.sh
+```
 - This sets up everything in `$HOME/Runix` and creates a shortcut command: `run`
 - On first use, you’ll be guided through initial setup.
 
